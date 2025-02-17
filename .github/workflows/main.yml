@@ -1,0 +1,89 @@
+name: Main CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    uses: ./.github/workflows/backend-ci.yml
+
+  frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    uses: ./.github/workflows/frontend-ci.yml
+
+  create-project-release:
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Backend Build
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-build
+          path: dist/backend
+
+      - name: Download Frontend Build
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: dist/frontend
+
+      - name: Create Combined Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: |
+            Wallzen Release v${{ github.run_number }}
+            
+            This release includes both frontend and backend updates.
+            
+            Changes in this release:
+            ${{ github.event.head_commit.message }}
+            
+            Build Date: ${{ env.DATE }}
+          draft: false
+          prerelease: false
+
+      - name: Create Release Archive
+        run: |
+          zip -r wallzen-v${{ github.run_number }}.zip dist/
+          
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./wallzen-v${{ github.run_number }}.zip
+          asset_name: wallzen-v${{ github.run_number }}.zip
+          asset_content_type: application/zip
