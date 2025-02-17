@@ -15,6 +15,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - uses: dorny/paths-filter@v2
         id: filter
@@ -25,23 +28,83 @@ jobs:
             frontend:
               - 'frontend/**'
 
-  backend:
+  build-backend:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    uses: ./.github/workflows/backend-ci.yml
+    runs-on: ubuntu-latest
 
-  frontend:
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Build Backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Upload Backend Build
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-build
+          path: backend/dist
+
+  build-frontend:
     needs: changes
     if: ${{ needs.changes.outputs.frontend == 'true' }}
-    uses: ./.github/workflows/frontend-ci.yml
+    runs-on: ubuntu-latest
 
-  create-project-release:
-    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001/api
+
+      - name: Upload Frontend Build
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: frontend/.next
+
+  create-release:
+    needs: [build-backend, build-frontend]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=date::$(date +'%Y-%m-%d %H:%M:%S')"
 
       - name: Download Backend Build
         uses: actions/download-artifact@v3
@@ -55,7 +118,14 @@ jobs:
           name: frontend-build
           path: dist/frontend
 
-      - name: Create Combined Release
+      - name: Update Submodules SHA
+        id: submodules
+        run: |
+          echo "BACKEND_SHA=$(cd backend && git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "FRONTEND_SHA=$(cd frontend && git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Create Release
+        id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,12 +135,14 @@ jobs:
           body: |
             Wallzen Release v${{ github.run_number }}
             
-            This release includes both frontend and backend updates.
+            📅 Build Date: ${{ steps.date.outputs.date }}
+            
+            Submodule Versions:
+            - Backend: ${{ env.BACKEND_SHA }}
+            - Frontend: ${{ env.FRONTEND_SHA }}
             
             Changes in this release:
             ${{ github.event.head_commit.message }}
-            
-            Build Date: ${{ env.DATE }}
           draft: false
           prerelease: false
 
