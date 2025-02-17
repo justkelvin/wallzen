@@ -1,0 +1,39 @@
+name: Update Submodules
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:      # Allow manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Update Submodules
+        run: |
+          git submodule update --remote --recursive
+
+      - name: Check for Changes
+        id: check_changes
+        run: |
+          if [[ -n $(git status -s) ]]; then
+            echo "::set-output name=changes::true"
+          fi
+
+      - name: Commit and Push Changes
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          git add .
+          git commit -m "chore: update submodules to latest version [skip ci]"
+          git push
