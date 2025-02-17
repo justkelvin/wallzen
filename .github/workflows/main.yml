@@ -5,6 +5,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:
 
 jobs:
   changes:
@@ -24,76 +25,44 @@ jobs:
         with:
           filters: |
             backend:
-              - 'backend/**'
+              - 'wallzen-backend/**'
             frontend:
-              - 'frontend/**'
+              - 'wallzen-frontend/**'
 
-  build-backend:
+  trigger-backend:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
         with:
           submodules: recursive
+      
+      - name: Trigger Backend Workflow
+        run: |
+          cd wallzen-backend
+          gh workflow run ci.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install Backend Dependencies
-        working-directory: backend
-        run: npm ci
-
-      - name: Build Backend
-        working-directory: backend
-        run: npm run build
-
-      - name: Upload Backend Build
-        uses: actions/upload-artifact@v3
-        with:
-          name: backend-build
-          path: backend/dist
-
-  build-frontend:
+  trigger-frontend:
     needs: changes
     if: ${{ needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
         with:
           submodules: recursive
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Frontend Dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build Frontend
-        working-directory: frontend
-        run: npm run build
+      
+      - name: Trigger Frontend Workflow
+        run: |
+          cd wallzen-frontend
+          gh workflow run ci.yml
         env:
-          NEXT_PUBLIC_API_URL: http://localhost:3001/api
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Frontend Build
-        uses: actions/upload-artifact@v3
-        with:
-          name: frontend-build
-          path: frontend/.next
-
-  create-release:
-    needs: [build-backend, build-frontend]
+  create-project-release:
+    needs: [trigger-backend, trigger-frontend]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     
@@ -102,60 +71,36 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Get current date
+      - name: Get Current Date
         id: date
-        run: echo "::set-output name=date::$(date +'%Y-%m-%d %H:%M:%S')"
+        run: echo "date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
-      - name: Download Backend Build
-        uses: actions/download-artifact@v3
-        with:
-          name: backend-build
-          path: dist/backend
-
-      - name: Download Frontend Build
-        uses: actions/download-artifact@v3
-        with:
-          name: frontend-build
-          path: dist/frontend
-
-      - name: Update Submodules SHA
-        id: submodules
+      - name: Get Submodule Versions
+        id: versions
         run: |
-          echo "BACKEND_SHA=$(cd backend && git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "FRONTEND_SHA=$(cd frontend && git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "backend=$(cd wallzen-backend && git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "frontend=$(cd wallzen-frontend && git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Create Release
-        id: create_release
+      - name: Create Project Release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ github.run_number }}
-          release_name: Release v${{ github.run_number }}
+          release_name: Wallzen v${{ github.run_number }}
           body: |
-            Wallzen Release v${{ github.run_number }}
+            🎉 Wallzen Release v${{ github.run_number }}
             
-            📅 Build Date: ${{ steps.date.outputs.date }}
+            📅 Release Date: ${{ steps.date.outputs.date }}
+            👤 Released by: ${{ github.actor }}
             
-            Submodule Versions:
-            - Backend: ${{ env.BACKEND_SHA }}
-            - Frontend: ${{ env.FRONTEND_SHA }}
+            📦 Components:
+            - Backend: ${{ steps.versions.outputs.backend }}
+            - Frontend: ${{ steps.versions.outputs.frontend }}
             
-            Changes in this release:
+            📝 Changes:
             ${{ github.event.head_commit.message }}
+            
+            🔗 Main Commit: ${{ github.sha }}
           draft: false
           prerelease: false
-
-      - name: Create Release Archive
-        run: |
-          zip -r wallzen-v${{ github.run_number }}.zip dist/
-          
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./wallzen-v${{ github.run_number }}.zip
-          asset_name: wallzen-v${{ github.run_number }}.zip
-          asset_content_type: application/zip
